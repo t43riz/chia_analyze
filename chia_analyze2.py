@@ -736,285 +736,268 @@ class EnhancedContentAnalyzer:
             'structure_statistics': structure_stats
         }
 class TopPerformerAnalyzer:
-    def __init__(self, content_analyzer, percentile_threshold=90):
+    def __init__(self, content_analyzer, percentile_thresholds=None):
         """
-        Initialize with ContentAnalyzer instance and performance threshold
-        percentile_threshold: percentile to consider as top performers (e.g., 90 for top 10%)
+        Initialize with ContentAnalyzer instance and configurable thresholds
+        percentile_thresholds: dict with thresholds for each metric (e.g., {'clicks': 80, 'opens': 75, 'revenue': 70})
         """
         self.df = content_analyzer.df
-        self.percentile_threshold = percentile_threshold
+        self.percentile_thresholds = percentile_thresholds or {
+            'clicks': 80,
+            'opens': 75,
+            'revenue': 70
+        }
         self.nlp = spacy.load('en_core_web_sm')
+        self.top_performers = {}
         
     def identify_top_performers(self):
-        """Identify top performing content based on multiple metrics"""
-        # Calculate performance thresholds
-        click_threshold = np.percentile(self.df['click_rate'], self.percentile_threshold)
-        open_threshold = np.percentile(self.df['open_rate'], self.percentile_threshold)
-        revenue_threshold = np.percentile(self.df['total_revenue'], self.percentile_threshold)
+        """Identify top performing content based on individual metrics"""
+        # First clean the dataframe
+        clean_df = self.df.copy()
         
-        # Identify top performers by different metrics
-        top_performers = {
-            'clicks': self.df[self.df['click_rate'] >= click_threshold],
-            'opens': self.df[self.df['open_rate'] >= open_threshold],
-            'revenue': self.df[self.df['total_revenue'] >= revenue_threshold],
-            'consistent': self.df[
-                (self.df['click_rate'] >= click_threshold) &
-                (self.df['open_rate'] >= open_threshold) &
-                (self.df['total_revenue'] >= revenue_threshold)
-            ]
+        # Remove rows where all key metrics are NaN
+        clean_df = clean_df.dropna(subset=['click_rate', 'open_rate', 'total_revenue'], how='all')
+        
+        print("\nData quality check:")
+        print(f"Original rows: {len(self.df)}")
+        print(f"Clean rows: {len(clean_df)}")
+        
+        # Print summary statistics for verification
+        print("\nClean data summary:")
+        print(clean_df[['click_rate', 'open_rate', 'total_revenue']].describe())
+        
+        metric_configs = {
+            'clicks': {
+                'metric': 'click_rate',
+                'threshold': self.percentile_thresholds['clicks']
+            },
+            'opens': {
+                'metric': 'open_rate',
+                'threshold': self.percentile_thresholds['opens']
+            },
+            'revenue': {
+                'metric': 'total_revenue',
+                'threshold': self.percentile_thresholds['revenue']
+            }
         }
         
-        return top_performers
-
-    def analyze_phrase_patterns(self, text_series):
-        """Analyze common phrases and their contexts"""
-        # Extract common bigrams and trigrams
-        def get_ngrams(text, n):
-            tokens = text.lower().split()
-            return list(zip(*[tokens[i:] for i in range(n)]))
+        # Store thresholds and campaigns for each metric
+        performance_data = {}
+        
+        for category, config in metric_configs.items():
+            metric = config['metric']
+            percentile = config['threshold']
             
-        all_bigrams = []
-        all_trigrams = []
-        
-        for text in text_series:
-            all_bigrams.extend(get_ngrams(text, 2))
-            all_trigrams.extend(get_ngrams(text, 3))
-        
-        # Count and sort by frequency
-        bigram_freq = Counter(all_bigrams).most_common(20)
-        trigram_freq = Counter(all_trigrams).most_common(20)
-        
-        return {
-            'common_bigrams': bigram_freq,
-            'common_trigrams': trigram_freq
-        }
-
-    def find_content_clusters(self, text_series, n_clusters=5):
-        """Find clusters of similar content using text features"""
-        # Check if we have any data
-        if text_series.empty:
-            print("\nWarning: No text data available for clustering")
-            return {
-                'cluster_assignments': [],
-                'cluster_characteristics': pd.DataFrame()
-            }
-
-        # Remove any null values
-        text_series = text_series.dropna()
-        if len(text_series) == 0:
-            print("\nWarning: No valid text data after removing null values")
-            return {
-                'cluster_assignments': [],
-                'cluster_characteristics': pd.DataFrame()
-            }
-
-        print(f"\nProcessing {len(text_series)} texts for clustering...")
-            
-        # Create text features
-        def extract_text_features(text):
-            try:
-                doc = self.nlp(str(text))
-                blob = TextBlob(str(text))
+            # Calculate threshold on non-NaN values
+            valid_values = clean_df[metric].dropna()
+            if len(valid_values) > 0:
+                threshold = np.percentile(valid_values, percentile)
                 
-                return {
-                    'word_count': len(text.split()),
-                    'avg_word_length': sum(len(word) for word in text.split()) / (len(text.split()) or 1),
-                    'sentiment': blob.sentiment.polarity,
-                    'subjectivity': blob.sentiment.subjectivity,
-                    'num_entities': len(doc.ents),
-                    'num_verbs': len([token for token in doc if token.pos_ == 'VERB']),
-                    'num_nouns': len([token for token in doc if token.pos_ == 'NOUN']),
-                    'num_adj': len([token for token in doc if token.pos_ == 'ADJ'])
+                # Identify top performers (avoiding NaN comparisons)
+                top_campaigns = clean_df[clean_df[metric].notna() & (clean_df[metric] >= threshold)].copy()
+            else:
+                print(f"Warning: No valid data for {metric}")
+                threshold = np.nan
+                top_campaigns = pd.DataFrame()
+            
+            performance_data[category] = {
+                'threshold': threshold,
+                'campaigns': top_campaigns,
+                'metric_name': metric,
+                'count': len(top_campaigns),
+                'mean_performance': top_campaigns[metric].mean()
+            }
+            
+            print(f"\nAnalysis for {category}:")
+            print(f"Threshold ({percentile}th percentile): {threshold:.4f}")
+            print(f"Number of top campaigns: {len(top_campaigns)}")
+            print(f"Mean {metric}: {top_campaigns[metric].mean():.4f}")
+        
+        # Find overlapping top performers
+        all_metrics = set(metric_configs.keys())
+        for r in range(2, len(all_metrics) + 1):
+            for metrics_combo in combinations(all_metrics, r):
+                combo_name = '_and_'.join(metrics_combo)
+                
+                # Find campaigns that are top performers in all selected metrics
+                combined_mask = pd.Series(True, index=self.df.index)
+                for metric in metrics_combo:
+                    config = metric_configs[metric]
+                    metric_name = config['metric']
+                    threshold = performance_data[metric]['threshold']
+                    combined_mask &= (self.df[metric_name] >= threshold)
+                
+                overlap_campaigns = self.df[combined_mask].copy()
+                
+                performance_data[combo_name] = {
+                    'campaigns': overlap_campaigns,
+                    'count': len(overlap_campaigns),
+                    'metrics_included': metrics_combo
                 }
-            except Exception as e:
-                print(f"\nWarning: Error processing text: {str(e)}")
-                return None
-            
-        # Extract features for clustering
-        features_list = []
-        for text in text_series:
-            features = extract_text_features(text)
-            if features is not None:
-                features_list.append(features)
-            
-        if not features_list:
-            print("\nWarning: No valid features extracted for clustering")
-            return {
-                'cluster_assignments': [],
-                'cluster_characteristics': pd.DataFrame()
-            }
-            
-        features_df = pd.DataFrame(features_list)
-        
-        # Verify we have enough data for the requested number of clusters
-        n_clusters = min(n_clusters, len(features_df))
-        if n_clusters < 2:
-            print("\nWarning: Not enough data for meaningful clustering")
-            return {
-                'cluster_assignments': [],
-                'cluster_characteristics': features_df.mean().to_frame().T
-            }
-        
-        # Scale features and perform clustering
-        scaler = StandardScaler()
-        scaled_features = scaler.fit_transform(features_df)
-        
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-        clusters = kmeans.fit_predict(scaled_features)
-        
-        # Analyze cluster characteristics
-        features_df['cluster'] = clusters
-        cluster_analysis = features_df.groupby('cluster').mean()
-        
-        print(f"\nClustering complete: Found {n_clusters} clusters")
-        print("Cluster sizes:")
-        print(features_df['cluster'].value_counts().sort_index())
-        
-        return {
-            'cluster_assignments': clusters,
-            'cluster_characteristics': cluster_analysis,
-            'feature_stats': {
-                'total_texts': len(text_series),
-                'processed_texts': len(features_list),
-                'features_per_cluster': features_df['cluster'].value_counts().to_dict()
-            }
-        }
-    def analyze_structure_patterns(self, top_performers):
-        """Analyze structural patterns in top performing content"""
-        def extract_structure_features(text):
-            paragraphs = text.split('\n\n')
-            sentences = [sent.text.strip() for sent in self.nlp(text).sents]
-            
-            return {
-                'num_paragraphs': len(paragraphs),
-                'avg_paragraph_length': np.mean([len(p.split()) for p in paragraphs]),
-                'num_sentences': len(sentences),
-                'avg_sentence_length': np.mean([len(sent.split()) for sent in sentences]),
-                'has_list': bool(re.search(r'^\s*[-•*]\s', text, re.MULTILINE)),
-                'has_numbers': bool(re.search(r'\d+', text)),
-                'has_question': bool(re.search(r'\?', text)),
-                'has_exclamation': bool(re.search(r'!', text)),
-                'has_price': bool(re.search(r'\$\d+', text)),
-                'link_count': len(re.findall(r'http[s]?://', text)),
-                'has_caps_words': bool(re.search(r'\b[A-Z]{2,}\b', text))
-            }
-            
-        # Analyze structure for different types of top performers
-        structure_patterns = {}
-        for perf_type, df in top_performers.items():
-            structures = []
-            for text in df['parsed_body'].unique():
-                structures.append(extract_structure_features(text))
-            
-            structure_patterns[perf_type] = pd.DataFrame(structures).mean()
-            
-        return structure_patterns
+                
+                print(f"\nOverlap Analysis for {combo_name}:")
+                print(f"Number of campaigns excelling in all metrics: {len(overlap_campaigns)}")
+                
+        self.top_performers = performance_data
+        return performance_data
 
-    def find_common_elements(self, top_performers):
-        """Find elements that frequently appear together in top performing content"""
-        def extract_elements(text):
+    def analyze_content_patterns(self, category):
+        """Analyze content patterns for a specific category of top performers"""
+        if category not in self.top_performers:
+            print(f"No data available for category: {category}")
+            return None
+            
+        campaigns = self.top_performers[category]['campaigns']
+        if len(campaigns) == 0:
+            print(f"No campaigns found for category: {category}")
+            return None
+            
+        # Print data quality information
+        print(f"\nAnalyzing {category}:")
+        print(f"Number of campaigns: {len(campaigns)}")
+        print("Available metrics:", campaigns.columns.tolist())
+            
+        campaigns = self.top_performers[category]['campaigns']
+        
+        # Analyze subjects
+        subjects = campaigns['subject'].dropna()
+        
+        # Basic text stats
+        subject_stats = {
+            'avg_length': subjects.str.len().mean(),
+            'word_count': subjects.str.split().str.len().mean(),
+            'has_number': subjects.str.contains(r'\d').mean(),
+            'has_question': subjects.str.contains(r'\?').mean(),
+            'has_exclamation': subjects.str.contains(r'!').mean(),
+        }
+        
+        # Common words and phrases
+        all_words = ' '.join(subjects).lower().split()
+        word_freq = Counter(all_words).most_common(10)
+        
+        # Analyze body content
+        bodies = campaigns['parsed_body'].dropna()
+        
+        # Extract key content features
+        def extract_content_features(text):
             return {
+                'length': len(text),
+                'paragraphs': len(text.split('\n\n')),
+                'has_list': bool(re.search(r'^\s*[-•*]\s', text, re.MULTILINE)),
                 'has_price': bool(re.search(r'\$\d+', text)),
-                'has_percentage': bool(re.search(r'\d+%', text)),
                 'has_date': bool(re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}\b', text)),
                 'has_cta': bool(re.search(r'\b(?:click|sign up|register|buy|shop|learn more|get started)\b', text, re.IGNORECASE)),
-                'has_urgency': bool(re.search(r'\b(?:limited time|hurry|ends soon|last chance|don\'t miss|only)\b', text, re.IGNORECASE)),
-                'has_personalization': bool(re.search(r'\b(?:you|your|you\'ll|you\'re)\b', text, re.IGNORECASE)),
-                'has_benefit': bool(re.search(r'\b(?:free|save|discount|offer|deal|exclusive)\b', text, re.IGNORECASE)),
-                'has_social_proof': bool(re.search(r'\b(?:popular|bestselling|trending|recommended|loved)\b', text, re.IGNORECASE))
+                'link_count': len(re.findall(r'http[s]?://', text))
             }
-            
-        # Create element co-occurrence network
-        G = nx.Graph()
         
-        for perf_type, df in top_performers.items():
-            for text in df['parsed_body'].unique():
-                elements = extract_elements(text)
-                present_elements = [k for k, v in elements.items() if v]
-                
-                # Add edges between co-occurring elements
-                for elem1, elem2 in combinations(present_elements, 2):
-                    if G.has_edge(elem1, elem2):
-                        G[elem1][elem2]['weight'] += 1
-                    else:
-                        G.add_edge(elem1, elem2, weight=1)
+        content_features = [extract_content_features(text) for text in bodies]
+        feature_stats = pd.DataFrame(content_features).mean()
+        
+        # Get performance metrics for this category
+        performance_metrics = {
+            'click_rate': campaigns['click_rate'].mean(),
+            'open_rate': campaigns['open_rate'].mean(),
+            'total_revenue': campaigns['total_revenue'].mean(),
+            'campaign_count': len(campaigns)
+        }
         
         return {
-            'network': G,
-            'common_pairs': sorted(G.edges(data=True), key=lambda x: x[2]['weight'], reverse=True)
+            'subject_stats': subject_stats,
+            'common_words': word_freq,
+            'content_features': feature_stats,
+            'performance_metrics': performance_metrics
         }
 
-    def generate_comprehensive_report(self):
-        """Generate a comprehensive analysis report of top performers"""
-        # Get top performers
-        top_performers = self.identify_top_performers()
+    def generate_insights_report(self):
+        """Generate comprehensive insights about top performers across categories"""
+        if not self.top_performers:
+            self.identify_top_performers()
         
-        if not top_performers['consistent'].empty:
-            # Analyze patterns
-            phrase_patterns = self.analyze_phrase_patterns(top_performers['consistent']['subject'])
-            content_clusters = self.find_content_clusters(top_performers['consistent']['parsed_body'])
-            structure_patterns = self.analyze_structure_patterns(top_performers)
-            common_elements = self.find_common_elements(top_performers)
-            
-            # Compile insights
-            insights = {
-                'performance_metrics': {
-                    perf_type: {
-                        'count': len(df),
-                        'avg_click_rate': df['click_rate'].mean(),
-                        'avg_open_rate': df['open_rate'].mean(),
-                        'avg_revenue': df['total_revenue'].mean()
-                    } for perf_type, df in top_performers.items()
-                },
-                'common_phrases': phrase_patterns,
-                'content_clusters': content_clusters,
-                'structure_patterns': structure_patterns,
-                'element_combinations': common_elements
-            }
-        else:
-            print("\nWarning: No consistent top performers found")
-            insights = {
-                'performance_metrics': {},
-                'common_phrases': {'common_bigrams': [], 'common_trigrams': []},
-                'content_clusters': {'cluster_assignments': [], 'cluster_characteristics': pd.DataFrame()},
-                'structure_patterns': {},
-                'element_combinations': {'network': nx.Graph(), 'common_pairs': []}
-            }
+        report = []
         
-        return insights
-    def print_actionable_insights(self, insights):
-        """Print actionable insights in a readable format"""
-        print("\nTOP PERFORMER ANALYSIS INSIGHTS")
-        print("\n1. Performance Metrics:")
-        for perf_type, metrics in insights['performance_metrics'].items():
-            print(f"\n{perf_type.title()} Performers:")
-            print(f"- Count: {metrics['count']}")
-            print(f"- Avg Click Rate: {metrics['avg_click_rate']:.2%}")
-            print(f"- Avg Open Rate: {metrics['avg_open_rate']:.2%}")
-            print(f"- Avg Revenue: ${metrics['avg_revenue']:.2f}")
+        # Analyze each category
+        for category in self.top_performers.keys():
+            insights = self.analyze_content_patterns(category)
+            if insights:
+                report.append(f"\nInsights for {category} Top Performers:")
+                report.append(f"Number of Campaigns: {insights['performance_metrics']['campaign_count']}")
+                
+                # Performance metrics
+                report.append("\nPerformance Metrics:")
+                for metric, value in insights['performance_metrics'].items():
+                    if metric != 'campaign_count':
+                        report.append(f"- Average {metric}: {value:.4f}")
+                
+                # Subject line patterns
+                report.append("\nSubject Line Patterns:")
+                for metric, value in insights['subject_stats'].items():
+                    report.append(f"- {metric}: {value:.2f}")
+                
+                report.append("\nMost Common Words in Subject Lines:")
+                for word, count in insights['common_words']:
+                    report.append(f"- {word}: {count} occurrences")
+                
+                # Content features
+                report.append("\nContent Characteristics:")
+                for feature, value in insights['content_features'].items():
+                    report.append(f"- {feature}: {value:.2f}")
         
-        print("\n2. Common Phrases:")
-        print("\nTop Bigrams:")
-        for bigram, count in insights['common_phrases']['common_bigrams'][:5]:
-            print(f"- {' '.join(bigram)}: {count} occurrences")
-            
-        print("\n3. Content Clusters:")
-        for cluster, chars in insights['content_clusters']['cluster_characteristics'].iterrows():
-            print(f"\nCluster {cluster} characteristics:")
-            for feature, value in chars.items():
-                print(f"- {feature}: {value:.2f}")
-        
-        print("\n4. Common Element Combinations:")
-        for elem1, elem2, data in insights['element_combinations']['common_pairs'][:5]:
-            print(f"- {elem1} + {elem2}: {data['weight']} occurrences")
+        return '\n'.join(report)
 
+    def plot_performance_distributions(self):
+        """Create visualizations comparing performance distributions"""
+        if not self.top_performers:
+            self.identify_top_performers()
+            
+        # Create visualization directory if it doesn't exist
+        os.makedirs('top_performer_analysis', exist_ok=True)
+        
+        # Plot performance distributions for each metric
+        metrics = ['click_rate', 'open_rate', 'total_revenue']
+        
+        for metric in metrics:
+            fig = go.Figure()
+            
+            # Add overall distribution
+            fig.add_trace(go.Histogram(
+                x=self.df[metric],
+                name='All Campaigns',
+                opacity=0.7,
+                nbinsx=50
+            ))
+            
+            # Add distributions for top performers
+            for category, data in self.top_performers.items():
+                if isinstance(data.get('campaigns'), pd.DataFrame):
+                    fig.add_trace(go.Histogram(
+                        x=data['campaigns'][metric],
+                        name=f'Top {category}',
+                        opacity=0.7,
+                        nbinsx=50
+                    ))
+            
+            fig.update_layout(
+                title=f'{metric} Distribution Comparison',
+                xaxis_title=metric,
+                yaxis_title='Count',
+                barmode='overlay'
+            )
+            
+            fig.write_html(f'top_performer_analysis/{metric}_distribution.html')
+            
 def main():
-    """Main execution function"""
+    """Main execution function with enhanced top performer analysis"""
     # Initialize all analyzers
     campaign_analyzer = CampaignAnalyzer('lgd_campaigns.csv', 'chia_campaigns.csv')
     content_analyzer = ContentAnalyzer('lgd_campaigns.csv', 'chia_campaigns.csv')
     enhanced_analyzer = EnhancedContentAnalyzer(content_analyzer)
-    top_performer_analyzer = TopPerformerAnalyzer(content_analyzer)
+    
+    # Initialize top performer analyzer with custom thresholds
+    top_performer_analyzer = TopPerformerAnalyzer(content_analyzer, {
+        'clicks': 80,  # 80th percentile for clicks
+        'opens': 75,   # 75th percentile for opens
+        'revenue': 70  # 70th percentile for revenue
+    })
     time_analyzer = TimeAnalyzer(content_analyzer)
 
     # Generate comprehensive insights
@@ -1028,8 +1011,15 @@ def main():
     structure_analysis = enhanced_analyzer.analyze_email_structure()
 
     print("\nGenerating Top Performer Analysis...")
-    top_performer_insights = top_performer_analyzer.generate_comprehensive_report()
-    top_performer_analyzer.print_actionable_insights(top_performer_insights)
+    # Get performance data for different categories
+    performance_data = top_performer_analyzer.identify_top_performers()
+    
+    # Generate comprehensive report with insights
+    top_performer_report = top_performer_analyzer.generate_insights_report()
+    print(top_performer_report)
+    
+    # Generate performance visualizations
+    top_performer_analyzer.plot_performance_distributions()
 
     print("\nGenerating Temporal Analysis...")
     temporal_patterns = time_analyzer.analyze_temporal_patterns()
@@ -1043,7 +1033,7 @@ def main():
     # Save results
     os.makedirs('analysis_results', exist_ok=True)
     
-    # Create summary report
+    # Create enhanced summary report
     with open('analysis_results/summary_report.txt', 'w') as f:
         f.write("Campaign Analysis Summary Report\n")
         f.write("==============================\n\n")
@@ -1054,15 +1044,33 @@ def main():
         f.write(f"Total Clicks: {campaign_metrics['overall_metrics']['total_clicks']:,}\n")
         f.write(f"Revenue per Click: ${campaign_metrics['overall_metrics']['revenue_per_click']:.4f}\n\n")
         
-        # Top Performing Content Characteristics
-        f.write("Top Performing Content Characteristics:\n")
-        for cluster, chars in top_performer_insights['content_clusters']['cluster_characteristics'].iterrows():
-            f.write(f"\nContent Cluster {cluster}:\n")
-            for feature, value in chars.items():
-                f.write(f"- {feature}: {value:.2f}\n")
+        # Top Performer Analysis (Enhanced)
+        f.write("Top Performer Analysis:\n")
+        f.write("=======================\n\n")
+        
+        # Write insights for each performance category
+        for category, data in performance_data.items():
+            f.write(f"\n{category.replace('_', ' ').title()} Performance:\n")
+            f.write(f"Number of campaigns: {data['count']}\n")
+            
+            if 'mean_performance' in data:
+                metric_name = data.get('metric_name', category)
+                f.write(f"Mean {metric_name}: {data['mean_performance']:.4f}\n")
+            
+            if 'metrics_included' in data:
+                f.write(f"Metrics included: {', '.join(data['metrics_included'])}\n")
+                
+            f.write("\n")
 
+        # Content Characteristics (if available)
+        if subject_analysis:
+            f.write("\nContent Analysis Highlights:\n")
+            f.write("==========================\n")
+            # Add relevant content analysis metrics here
+            
         # Temporal Insights
         f.write("\nTemporal Performance Insights:\n")
+        f.write("============================\n")
         best_hours = temporal_patterns['hourly']['click_rate'].nlargest(3)
         f.write(f"Top performing hours: {best_hours.index.tolist()}\n")
         
@@ -1074,6 +1082,7 @@ def main():
         
         # Anomalies Summary
         f.write("\nPerformance Anomalies:\n")
+        f.write("=====================\n")
         anomaly_dates = anomalies[anomalies['click_rate_anomaly']].index
         f.write(f"Number of anomalous days: {len(anomaly_dates)}\n")
         if len(anomaly_dates) > 0:
@@ -1083,6 +1092,7 @@ def main():
         
         # Seasonality Insights
         f.write("\nSeasonality Analysis:\n")
+        f.write("====================\n")
         f.write("Seasonal patterns detected in:\n")
         for metric in ['click_rate', 'open_rate', 'total_revenue']:
             seasonal = seasonality_analysis.get(metric, {}).get('seasonal')
@@ -1093,6 +1103,7 @@ def main():
     print("Visualizations saved in:")
     print("- 'analysis_output': Campaign visualizations")
     print("- 'time_analysis_output': Temporal analysis visualizations")
+    print("- 'top_performer_analysis': Top performer visualizations")
 
 if __name__ == "__main__":
     main()
