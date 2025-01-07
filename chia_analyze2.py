@@ -28,7 +28,7 @@ from itertools import combinations
 import spacy
 import os
 import plotly.graph_objects as go
-
+from scipy import stats as scipy_stats
 
 class TimeAnalyzer:
     def __init__(self, content_analyzer):
@@ -1312,6 +1312,7 @@ class WordPerformanceAnalyzer:
         print("Visualizations saved in 'word_analysis' directory")
 
 
+
 class EnhancedSubjectLineAnalyzer:
     def __init__(self, content_analyzer):
         """Initialize with ContentAnalyzer instance"""
@@ -1408,7 +1409,7 @@ class EnhancedSubjectLineAnalyzer:
     def analyze_subject_patterns(self, min_occurrences=5):
         """Analyze patterns in subject lines with enhanced statistical analysis"""
         word_stats = {}
-        pattern_stats = {
+        pattern_data = {
             'length_impact': {},
             'pos_patterns': {},
             'entity_patterns': {},
@@ -1428,24 +1429,24 @@ class EnhancedSubjectLineAnalyzer:
             
             # Track special features
             if features['has_number']:
-                pattern_stats['special_features']['has_number']['count'] += 1
-                pattern_stats['special_features']['has_number']['open_rates'].append(row['open_rate'])
+                pattern_data['special_features']['has_number']['count'] += 1
+                pattern_data['special_features']['has_number']['open_rates'].append(row['open_rate'])
                 
             if features['has_currency']:
-                pattern_stats['special_features']['has_currency']['count'] += 1
-                pattern_stats['special_features']['has_currency']['open_rates'].append(row['open_rate'])
+                pattern_data['special_features']['has_currency']['count'] += 1
+                pattern_data['special_features']['has_currency']['open_rates'].append(row['open_rate'])
                 
             if features['has_percentage']:
-                pattern_stats['special_features']['has_percentage']['count'] += 1
-                pattern_stats['special_features']['has_percentage']['open_rates'].append(row['open_rate'])
+                pattern_data['special_features']['has_percentage']['count'] += 1
+                pattern_data['special_features']['has_percentage']['open_rates'].append(row['open_rate'])
                 
             # Track sentiment
             if features['sentiment'] > 0.1:
-                pattern_stats['special_features']['sentiment']['positive'].append(row['open_rate'])
+                pattern_data['special_features']['sentiment']['positive'].append(row['open_rate'])
             elif features['sentiment'] < -0.1:
-                pattern_stats['special_features']['sentiment']['negative'].append(row['open_rate'])
+                pattern_data['special_features']['sentiment']['negative'].append(row['open_rate'])
             else:
-                pattern_stats['special_features']['sentiment']['neutral'].append(row['open_rate'])
+                pattern_data['special_features']['sentiment']['neutral'].append(row['open_rate'])
             
             # Analyze individual words
             unique_words = set(features['words'])
@@ -1465,59 +1466,59 @@ class EnhancedSubjectLineAnalyzer:
                     word_stats[word]['positions'].append(features['words'].index(word))
                     word_stats[word]['capitalized_count'] += 1 if word[0].isupper() else 0
             
-            # Analyze word combinations (bigrams and trigrams)
+            # Analyze word combinations (bigrams)
             words = features['words']
             for i in range(len(words) - 1):
                 bigram = (words[i], words[i + 1])
-                if bigram not in pattern_stats['word_combinations']:
-                    pattern_stats['word_combinations'][bigram] = {
+                if bigram not in pattern_data['word_combinations']:
+                    pattern_data['word_combinations'][bigram] = {
                         'count': 1,
                         'open_rates': [row['open_rate']],
                         'contexts': [subject]
                     }
                 else:
-                    pattern_stats['word_combinations'][bigram]['count'] += 1
-                    pattern_stats['word_combinations'][bigram]['open_rates'].append(row['open_rate'])
-                    pattern_stats['word_combinations'][bigram]['contexts'].append(subject)
+                    pattern_data['word_combinations'][bigram]['count'] += 1
+                    pattern_data['word_combinations'][bigram]['open_rates'].append(row['open_rate'])
+                    pattern_data['word_combinations'][bigram]['contexts'].append(subject)
             
             # Length analysis
             length_bin = len(subject) // 10 * 10  # Group by 10-character intervals
-            if length_bin not in pattern_stats['length_impact']:
-                pattern_stats['length_impact'][length_bin] = {
+            if length_bin not in pattern_data['length_impact']:
+                pattern_data['length_impact'][length_bin] = {
                     'count': 1,
                     'open_rates': [row['open_rate']],
                     'examples': [subject]
                 }
             else:
-                pattern_stats['length_impact'][length_bin]['count'] += 1
-                pattern_stats['length_impact'][length_bin]['open_rates'].append(row['open_rate'])
-                pattern_stats['length_impact'][length_bin]['examples'].append(subject)
+                pattern_data['length_impact'][length_bin]['count'] += 1
+                pattern_data['length_impact'][length_bin]['open_rates'].append(row['open_rate'])
+                pattern_data['length_impact'][length_bin]['examples'].append(subject)
             
             # POS patterns
             for pos, count in features['pos_tags'].items():
-                if pos not in pattern_stats['pos_patterns']:
-                    pattern_stats['pos_patterns'][pos] = {
+                if pos not in pattern_data['pos_patterns']:
+                    pattern_data['pos_patterns'][pos] = {
                         'count': 1,
                         'open_rates': [row['open_rate']],
                         'examples': [subject]
                     }
                 else:
-                    pattern_stats['pos_patterns'][pos]['count'] += 1
-                    pattern_stats['pos_patterns'][pos]['open_rates'].append(row['open_rate'])
-                    pattern_stats['pos_patterns'][pos]['examples'].append(subject)
+                    pattern_data['pos_patterns'][pos]['count'] += 1
+                    pattern_data['pos_patterns'][pos]['open_rates'].append(row['open_rate'])
+                    pattern_data['pos_patterns'][pos]['examples'].append(subject)
             
             # Entity patterns
             for entity, label in features['entities']:
-                if label not in pattern_stats['entity_patterns']:
-                    pattern_stats['entity_patterns'][label] = {
+                if label not in pattern_data['entity_patterns']:
+                    pattern_data['entity_patterns'][label] = {
                         'count': 1,
                         'open_rates': [row['open_rate']],
                         'examples': [(entity, subject)]
                     }
                 else:
-                    pattern_stats['entity_patterns'][label]['count'] += 1
-                    pattern_stats['entity_patterns'][label]['open_rates'].append(row['open_rate'])
-                    pattern_stats['entity_patterns'][label]['examples'].append((entity, subject))
+                    pattern_data['entity_patterns'][label]['count'] += 1
+                    pattern_data['entity_patterns'][label]['open_rates'].append(row['open_rate'])
+                    pattern_data['entity_patterns'][label]['examples'].append((entity, subject))
         
         # Convert word stats to DataFrame with enhanced statistics
         word_results = []
@@ -1534,15 +1535,15 @@ class EnhancedSubjectLineAnalyzer:
                 
                 # Perform statistical test
                 other_campaigns = self.df[~self.df['subject'].str.contains(word, case=False, regex=False)]
-                _, p_value = stats.ttest_ind(
+                _, p_value = scipy_stats.ttest_ind(
                     open_rates,
                     other_campaigns['open_rate'].values,
                     equal_var=False  # Use Welch's t-test for unequal variances
                 )
                 
-                # Calculate average position and position impact
+                # Average position and position impact
                 avg_position = np.mean(stats['positions'])
-                position_impact = stats.get('capitalized_count', 0) / stats['count']
+                position_impact = stats['capitalized_count'] / stats['count']
                 
                 word_results.append({
                     'word': word,
@@ -1556,17 +1557,16 @@ class EnhancedSubjectLineAnalyzer:
                     'contexts': stats['contexts'][:5],  # Store up to 5 example contexts
                     'avg_position': avg_position,
                     'capitalization_rate': position_impact,
-                    'confidence_interval': stats.t.interval(
+                    'confidence_interval': scipy_stats.t.interval(
                         0.95, 
                         len(open_rates)-1, 
                         loc=mean_open_rate, 
-                        scale=stats.sem(open_rates)
+                        scale=scipy_stats.sem(open_rates)
                     ) if len(open_rates) > 1 else (0, 0)
                 })
         
-        return pd.DataFrame(word_results), pattern_stats
-
-    def create_enhanced_visualizations(self, word_results_df, pattern_stats):
+        return pd.DataFrame(word_results), pattern_data
+    def create_enhanced_visualizations(self, word_results_df, pattern_data):
         """Create comprehensive visualizations with additional insights"""
         os.makedirs('subject_analysis_output', exist_ok=True)
         
@@ -1608,7 +1608,7 @@ class EnhancedSubjectLineAnalyzer:
         
         # 2. Subject Length Impact
         length_data = []
-        for length_bin, stats in pattern_stats['length_impact'].items():
+        for length_bin, stats in pattern_data['length_impact'].items():
             if stats['count'] >= 5:  # Minimum sample size
                 length_data.append({
                     'length_bin': length_bin,
@@ -1639,7 +1639,7 @@ class EnhancedSubjectLineAnalyzer:
         
         # 3. Part of Speech Impact
         pos_data = []
-        for pos, stats in pattern_stats['pos_patterns'].items():
+        for pos, stats in pattern_data['pos_patterns'].items():
             if stats['count'] >= 5:
                 pos_data.append({
                     'pos': pos,
@@ -1667,7 +1667,7 @@ class EnhancedSubjectLineAnalyzer:
         
         # 4. Special Features Impact
         special_features = []
-        for feature, data in pattern_stats['special_features'].items():
+        for feature, data in pattern_data['special_features'].items():
             if feature != 'sentiment':
                 if data['count'] >= 5:
                     special_features.append({
@@ -1677,7 +1677,7 @@ class EnhancedSubjectLineAnalyzer:
                     })
         
         # Add sentiment analysis
-        sentiment_data = pattern_stats['special_features']['sentiment']
+        sentiment_data = pattern_data['special_features']['sentiment']
         for sentiment_type in ['positive', 'negative', 'neutral']:
             if len(sentiment_data[sentiment_type]) >= 5:
                 special_features.append({
@@ -1733,7 +1733,7 @@ class EnhancedSubjectLineAnalyzer:
         
         position_impact.write_html('subject_analysis_output/position_impact.html')
 
-    def generate_comprehensive_report(self, word_results_df, pattern_stats):
+    def generate_comprehensive_report(self, word_results_df, pattern_data):
         """Generate a detailed analytical report"""
         report = []
         report.append("Comprehensive Subject Line Analysis Report")
@@ -1772,7 +1772,7 @@ class EnhancedSubjectLineAnalyzer:
         report.append("\n3. Special Features Analysis")
         report.append("---------------------------")
         
-        for feature, data in pattern_stats['special_features'].items():
+        for feature, data in pattern_data['special_features'].items():
             if feature != 'sentiment':
                 if data['count'] >= 5:
                     avg_rate = np.mean(data['open_rates'])
@@ -1784,7 +1784,7 @@ class EnhancedSubjectLineAnalyzer:
         
         # Sentiment Analysis
         report.append("\nSentiment Analysis:")
-        sentiment_data = pattern_stats['special_features']['sentiment']
+        sentiment_data = pattern_data['special_features']['sentiment']
         for sentiment_type in ['positive', 'negative', 'neutral']:
             if len(sentiment_data[sentiment_type]) >= 5:
                 avg_rate = np.mean(sentiment_data[sentiment_type])
@@ -1796,7 +1796,7 @@ class EnhancedSubjectLineAnalyzer:
         report.append("------------------------")
         
         length_impacts = []
-        for length_bin, stats in pattern_stats['length_impact'].items():
+        for length_bin, stats in pattern_data['length_impact'].items():
             if stats['count'] >= 5:
                 avg_rate = np.mean(stats['open_rates'])
                 length_impacts.append((length_bin, avg_rate, stats['count']))
@@ -1806,14 +1806,15 @@ class EnhancedSubjectLineAnalyzer:
         for length_bin, rate, count in length_impacts[:3]:
             report.append(f"- {length_bin}-{length_bin+10} characters: {rate*100:.2f}% open rate (n={count})")
             report.append("  Example:")
-            report.append(f"  * {pattern_stats['length_impact'][length_bin]['examples'][0]}")
+            report.append(f"  * {pattern_data['length_impact'][length_bin]['examples'][0]}")
         
-        # 5. Part of Speech Analysis
+        # 5. Language Pattern Analysis
         report.append("\n5. Language Pattern Analysis")
         report.append("---------------------------")
         
+        # POS Analysis
         pos_impacts = []
-        for pos, stats in pattern_stats['pos_patterns'].items():
+        for pos, stats in pattern_data['pos_patterns'].items():
             if stats['count'] >= 5:
                 avg_rate = np.mean(stats['open_rates'])
                 pos_impacts.append((pos, avg_rate, stats['count']))
@@ -1823,14 +1824,14 @@ class EnhancedSubjectLineAnalyzer:
         for pos, rate, count in pos_impacts:
             report.append(f"- {pos}: {rate*100:.2f}% open rate (n={count})")
             report.append("  Example:")
-            report.append(f"  * {pattern_stats['pos_patterns'][pos]['examples'][0]}")
+            report.append(f"  * {pattern_data['pos_patterns'][pos]['examples'][0]}")
         
         # 6. Entity Analysis
         report.append("\n6. Named Entity Analysis")
         report.append("----------------------")
         
         entity_impacts = []
-        for entity_type, stats in pattern_stats['entity_patterns'].items():
+        for entity_type, stats in pattern_data['entity_patterns'].items():
             if stats['count'] >= 5:
                 avg_rate = np.mean(stats['open_rates'])
                 entity_impacts.append((entity_type, avg_rate, stats['count'], stats['examples'][0]))
@@ -1887,7 +1888,7 @@ class EnhancedSubjectLineAnalyzer:
                 
                 # Statistical test
                 other_campaigns = self.df[~self.df['subject'].str.contains(f"{pair[0]}.*{pair[1]}", case=False)]
-                _, p_value = stats.ttest_ind(
+                _, p_value = scipy_stats.ttest_ind(
                     open_rates,
                     other_campaigns['open_rate'].values,
                     equal_var=False
@@ -1974,6 +1975,25 @@ class EnhancedSubjectLineAnalyzer:
         
         fig.write_html('subject_analysis_output/word_combinations_network.html')
 
+        # Create bar chart of top combinations
+        top_combinations = significant_pairs.head(10)
+        
+        fig = go.Figure(go.Bar(
+            x=top_combinations['word_pair'],
+            y=top_combinations['open_rate_impact'] * 100,
+            text=top_combinations['count'].apply(lambda x: f'n={x}'),
+            textposition='auto',
+        ))
+        
+        fig.update_layout(
+            title='Top Word Combinations by Impact',
+            xaxis_title='Word Pair',
+            yaxis_title='Open Rate Impact (%)',
+            height=500,
+            xaxis_tickangle=-45
+        )
+        
+        fig.write_html('subject_analysis_output/top_combinations.html')
         
 def main():
     """Main execution function with comprehensive campaign analysis"""
