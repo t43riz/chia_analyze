@@ -989,6 +989,15 @@ class TopPerformerAnalyzer:
 
 
 
+import pandas as pd
+import numpy as np
+from scipy import stats
+from collections import Counter
+from itertools import combinations
+import spacy
+import os
+import plotly.graph_objects as go
+
 class WordPerformanceAnalyzer:
     def __init__(self, content_analyzer):
         """Initialize with ContentAnalyzer instance"""
@@ -1081,7 +1090,11 @@ class WordPerformanceAnalyzer:
                                 campaigns_without_word[metric].dropna()
                             )
                             metrics[f'{metric}_p_value'] = p_value
-                        except:
+                            
+                            # Add diagnostic print
+                            print(f"Successfully added p-value for {metric}: {p_value}")
+                        except Exception as e:
+                            print(f"Error calculating p-value for {metric}: {str(e)}")
                             metrics[f'{metric}_p_value'] = 1.0  # Set to 1 if test fails
                     
                     word_performances.append(metrics)
@@ -1093,29 +1106,46 @@ class WordPerformanceAnalyzer:
         performance_views = {}
         
         for metric in ['click_rate', 'open_rate', 'total_revenue']:
-            # Filter for statistical significance
-            significant_results = results[
-                (results[f'{metric}_p_value'] < 0.05) &  # Statistically significant
-                (results['occurrences'] >= min_occurrences) &  # Enough occurrences
-                (results['campaigns_with_word'] >= 5)  # Minimum campaign threshold
-            ].copy()
+            # Map the metric name for total_revenue
+            p_value_col = f"{metric}_p_value"
+            lift_col = f"{metric}_lift"
             
-            # Sort by lift
-            performance_views[f'{metric}_top_words'] = (
-                significant_results
-                .sort_values(f'{metric}_lift', ascending=False)
-                .head(20)
-            )
+            # Print diagnostic information
+            print(f"\nAnalyzing {metric}:")
+            print(f"Available columns: {results.columns.tolist()}")
             
-            # Print insights
-            print(f"\nTop words for {metric} performance (p < 0.05):")
-            for _, row in performance_views[f'{metric}_top_words'].head().iterrows():
-                print(f"\nWord: '{row['word']}'")
-                print(f"Occurrences: {row['occurrences']}")
-                print(f"Lift: {row[f'{metric}_lift']:.2%}")
-                print(f"With word: {row[f'{metric}_with']:.4f}")
-                print(f"Without word: {row[f'{metric}_without']:.4f}")
-                print(f"P-value: {row[f'{metric}_p_value']:.4f}")
+            try:
+                # Filter for statistical significance
+                significant_results = results[
+                    (results[p_value_col] < 0.05) &  # Statistically significant
+                    (results['occurrences'] >= min_occurrences) &  # Enough occurrences
+                    (results['campaigns_with_word'] >= 5)  # Minimum campaign threshold
+                ].copy()
+                
+                # Sort by lift
+                performance_views[f'{metric}_top_words'] = (
+                    significant_results
+                    .sort_values(lift_col, ascending=False)
+                    .head(20)
+                )
+                
+                # Print insights for this metric
+                df = performance_views[f'{metric}_top_words']
+                if not df.empty:
+                    print(f"\nTop words for {metric} performance (p < 0.05):")
+                    for _, row in df.head().iterrows():
+                        print(f"\nWord: '{row['word']}'")
+                        print(f"Occurrences: {row['occurrences']}")
+                        print(f"Lift: {row[f'{metric}_lift']:.2%}")
+                        print(f"With word: {row[f'{metric}_with']:.4f}")
+                        print(f"Without word: {row[f'{metric}_without']:.4f}")
+                        print(f"P-value: {row[f'{metric}_p_value']:.4f}")
+                else:
+                    print(f"\nNo significant words found for {metric}")
+                    
+            except KeyError as e:
+                print(f"Error processing {metric}: {str(e)}")
+                performance_views[f'{metric}_top_words'] = pd.DataFrame()
         
         return performance_views
 
@@ -1132,7 +1162,7 @@ class WordPerformanceAnalyzer:
         
         # Get top words for each metric
         top_words = {}
-        for metric in ['click_rate', 'open_rate', 'revenue']:
+        for metric in ['click_rate', 'open_rate', 'total_revenue']:
             top_words[metric] = set(
                 performance_views[f'{metric}_top_words']['word'].head(top_words_per_metric)
             )
@@ -1142,7 +1172,7 @@ class WordPerformanceAnalyzer:
         # Analyze combinations
         combination_results = []
         
-        for metric in ['click_rate', 'open_rate', 'revenue']:
+        for metric in ['click_rate', 'open_rate', 'total_revenue']:
             words = list(top_words[metric])
             print(f"\nAnalyzing combinations for {metric}...")
             
@@ -1181,7 +1211,8 @@ class WordPerformanceAnalyzer:
                             campaigns_with_neither[metric].dropna()
                         )
                         result['p_value'] = p_value
-                    except:
+                    except Exception as e:
+                        print(f"Error calculating p-value for combination {word1}+{word2}: {str(e)}")
                         result['p_value'] = 1.0  # Set to 1 if test fails
                     
                     combination_results.append(result)
@@ -1194,7 +1225,7 @@ class WordPerformanceAnalyzer:
         ]
         
         # Print insights
-        for metric in ['click_rate', 'open_rate', 'revenue']:
+        for metric in ['click_rate', 'open_rate', 'total_revenue']:
             metric_combinations = (
                 significant_combinations[significant_combinations['metric'] == metric]
                 .sort_values('lift', ascending=False)
@@ -1220,7 +1251,7 @@ class WordPerformanceAnalyzer:
         print("\nGenerating visualizations...")
         os.makedirs('word_analysis', exist_ok=True)
         
-        for metric in ['click_rate', 'open_rate', 'revenue']:
+        for metric in ['click_rate', 'open_rate', 'total_revenue']:
             # Get top words for this metric
             top_words = performance_views[f'{metric}_top_words']
             
@@ -1279,9 +1310,9 @@ class WordPerformanceAnalyzer:
             fig.write_html(f'word_analysis/{metric}_frequency_impact.html')
         
         print("Visualizations saved in 'word_analysis' directory")
-        
+
 def main():
-    """Main execution function with enhanced top performer and word performance analysis"""
+    """Main execution function with enhanced analysis"""
     # Initialize all analyzers
     campaign_analyzer = CampaignAnalyzer('lgd_campaigns.csv', 'chia_campaigns.csv')
     content_analyzer = ContentAnalyzer('lgd_campaigns.csv', 'chia_campaigns.csv')
@@ -1378,7 +1409,7 @@ def main():
         # Word Combinations
         if not word_combinations.empty:
             f.write("\nTop Word Combinations:\n")
-            for metric in ['click_rate', 'open_rate', 'revenue']:
+            for metric in ['click_rate', 'open_rate', 'total_revenue']:
                 metric_combinations = word_combinations[
                     word_combinations['metric'] == metric
                 ].sort_values('lift', ascending=False).head(3)
@@ -1388,7 +1419,7 @@ def main():
                     for _, row in metric_combinations.iterrows():
                         f.write(f"- '{row['word1']}' + '{row['word2']}': ")
                         f.write(f"{row['lift']:.2%} lift (p={row['p_value']:.4f})\n")
-            
+        
         # Content Analysis Highlights
         if subject_analysis:
             f.write("\nContent Analysis Highlights:\n")
