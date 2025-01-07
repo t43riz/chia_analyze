@@ -6,7 +6,7 @@ import spacy
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Any
+from typing import Dict, List, Any  # Add this import
 from itertools import combinations
 from collections import Counter
 from textblob import TextBlob
@@ -19,6 +19,8 @@ import networkx as nx
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+
+
 class TimeAnalyzer:
     def __init__(self, content_analyzer):
         """Initialize with ContentAnalyzer instance"""
@@ -984,9 +986,302 @@ class TopPerformerAnalyzer:
             )
             
             fig.write_html(f'top_performer_analysis/{metric}_distribution.html')
+
+
+
+class WordPerformanceAnalyzer:
+    def __init__(self, content_analyzer):
+        """Initialize with ContentAnalyzer instance"""
+        self.df = content_analyzer.df.copy()
+        # Clean and prepare data
+        self.df = self.df.dropna(subset=['subject', 'parsed_body', 'click_rate', 'open_rate', 'total_revenue'])
+        self.nlp = spacy.load('en_core_web_sm')
+        print(f"Initialized with {len(self.df)} valid campaigns")
+        
+    def analyze_word_performance(self, min_occurrences=10):
+        """
+        Analyze how individual words correlate with performance metrics
+        
+        Args:
+            min_occurrences: Minimum number of times a word must appear to be included
+        """
+        # Combine subject and body text
+        self.df['full_text'] = self.df['subject'] + ' ' + self.df['parsed_body']
+        
+        # Process text and extract meaningful words
+        word_performances = []
+        
+        # Track all words and their occurrences
+        word_counts = Counter()
+        campaign_words = {}
+        
+        print("Processing campaign text...")
+        for idx, row in self.df.iterrows():
+            doc = self.nlp(row['full_text'].lower())
+            # Only keep meaningful words (no stopwords, punctuation, etc.)
+            meaningful_words = [
+                token.text for token in doc 
+                if not token.is_stop and not token.is_punct and not token.is_space
+                and len(token.text) > 1  # Avoid single characters
+            ]
+            word_counts.update(meaningful_words)
+            campaign_words[idx] = set(meaningful_words)  # Use set to count word presence, not frequency
+        
+        print(f"Analyzing {len(word_counts)} unique words...")
+        # Analyze performance for each word that appears enough times
+        for word, count in word_counts.items():
+            if count >= min_occurrences:
+                # Get campaigns with and without this word
+                with_word = [
+                    idx for idx in campaign_words 
+                    if word in campaign_words[idx]
+                ]
+                
+                if len(with_word) > 0:
+                    # Calculate metrics
+                    campaigns_with_word = self.df.loc[with_word]
+                    campaigns_without_word = self.df.loc[~self.df.index.isin(with_word)]
+                    
+                    metrics = {
+                        'word': word,
+                        'occurrences': count,
+                        'campaigns_with_word': len(campaigns_with_word),
+                        'campaigns_without_word': len(campaigns_without_word),
+                        
+                        # Click rate metrics
+                        'click_rate_with': campaigns_with_word['click_rate'].mean(),
+                        'click_rate_without': campaigns_without_word['click_rate'].mean(),
+                        'click_rate_lift': (
+                            campaigns_with_word['click_rate'].mean() / 
+                            campaigns_without_word['click_rate'].mean() - 1
+                        ) if campaigns_without_word['click_rate'].mean() > 0 else 0,
+                        
+                        # Open rate metrics
+                        'open_rate_with': campaigns_with_word['open_rate'].mean(),
+                        'open_rate_without': campaigns_without_word['open_rate'].mean(),
+                        'open_rate_lift': (
+                            campaigns_with_word['open_rate'].mean() / 
+                            campaigns_without_word['open_rate'].mean() - 1
+                        ) if campaigns_without_word['open_rate'].mean() > 0 else 0,
+                        
+                        # Total Revenue metrics
+                        'total_revenue_with': campaigns_with_word['total_revenue'].mean(),
+                        'total_revenue_without': campaigns_without_word['total_revenue'].mean(),
+                        'total_revenue_lift': (
+                            campaigns_with_word['total_revenue'].mean() / 
+                            campaigns_without_word['total_revenue'].mean() - 1
+                        ) if campaigns_without_word['total_revenue'].mean() > 0 else 0
+                    }
+                    
+                    # Add statistical significance using t-test
+                    for metric in ['click_rate', 'open_rate', 'total_revenue']:
+                        try:
+                            _, p_value = stats.ttest_ind(
+                                campaigns_with_word[metric].dropna(),
+                                campaigns_without_word[metric].dropna()
+                            )
+                            metrics[f'{metric}_p_value'] = p_value
+                        except:
+                            metrics[f'{metric}_p_value'] = 1.0  # Set to 1 if test fails
+                    
+                    word_performances.append(metrics)
+        
+        # Convert to DataFrame and sort by different metrics
+        results = pd.DataFrame(word_performances)
+        
+        # Create different views of the data
+        performance_views = {}
+        
+        for metric in ['click_rate', 'open_rate', 'total_revenue']:
+            # Filter for statistical significance
+            significant_results = results[
+                (results[f'{metric}_p_value'] < 0.05) &  # Statistically significant
+                (results['occurrences'] >= min_occurrences) &  # Enough occurrences
+                (results['campaigns_with_word'] >= 5)  # Minimum campaign threshold
+            ].copy()
             
+            # Sort by lift
+            performance_views[f'{metric}_top_words'] = (
+                significant_results
+                .sort_values(f'{metric}_lift', ascending=False)
+                .head(20)
+            )
+            
+            # Print insights
+            print(f"\nTop words for {metric} performance (p < 0.05):")
+            for _, row in performance_views[f'{metric}_top_words'].head().iterrows():
+                print(f"\nWord: '{row['word']}'")
+                print(f"Occurrences: {row['occurrences']}")
+                print(f"Lift: {row[f'{metric}_lift']:.2%}")
+                print(f"With word: {row[f'{metric}_with']:.4f}")
+                print(f"Without word: {row[f'{metric}_without']:.4f}")
+                print(f"P-value: {row[f'{metric}_p_value']:.4f}")
+        
+        return performance_views
+
+    def analyze_word_combinations(self, top_words_per_metric=10):
+        """
+        Analyze how combinations of high-performing words work together
+        
+        Args:
+            top_words_per_metric: Number of top words to consider for combinations
+        """
+        print("\nAnalyzing word combinations...")
+        # First get individual word performance
+        performance_views = self.analyze_word_performance()
+        
+        # Get top words for each metric
+        top_words = {}
+        for metric in ['click_rate', 'open_rate', 'revenue']:
+            top_words[metric] = set(
+                performance_views[f'{metric}_top_words']['word'].head(top_words_per_metric)
+            )
+            print(f"\nTop {len(top_words[metric])} words for {metric}:")
+            print(', '.join(top_words[metric]))
+        
+        # Analyze combinations
+        combination_results = []
+        
+        for metric in ['click_rate', 'open_rate', 'revenue']:
+            words = list(top_words[metric])
+            print(f"\nAnalyzing combinations for {metric}...")
+            
+            # Look at pairs of words
+            for word1, word2 in combinations(words, 2):
+                # Find campaigns with both words
+                campaigns_with_both = self.df[
+                    self.df['full_text'].str.contains(word1, case=False) &
+                    self.df['full_text'].str.contains(word2, case=False)
+                ]
+                
+                # Find campaigns with neither word
+                campaigns_with_neither = self.df[
+                    ~self.df['full_text'].str.contains(word1, case=False) &
+                    ~self.df['full_text'].str.contains(word2, case=False)
+                ]
+                
+                if len(campaigns_with_both) >= 5:  # Minimum sample size
+                    result = {
+                        'metric': metric,
+                        'word1': word1,
+                        'word2': word2,
+                        'campaigns_with_both': len(campaigns_with_both),
+                        f'{metric}_with_both': campaigns_with_both[metric].mean(),
+                        f'{metric}_with_neither': campaigns_with_neither[metric].mean(),
+                        'lift': (
+                            campaigns_with_both[metric].mean() /
+                            campaigns_with_neither[metric].mean() - 1
+                        ) if campaigns_with_neither[metric].mean() > 0 else 0
+                    }
+                    
+                    # Add statistical significance
+                    try:
+                        _, p_value = stats.ttest_ind(
+                            campaigns_with_both[metric].dropna(),
+                            campaigns_with_neither[metric].dropna()
+                        )
+                        result['p_value'] = p_value
+                    except:
+                        result['p_value'] = 1.0  # Set to 1 if test fails
+                    
+                    combination_results.append(result)
+        
+        # Convert to DataFrame and filter significant results
+        combinations_df = pd.DataFrame(combination_results)
+        significant_combinations = combinations_df[
+            (combinations_df['p_value'] < 0.05) &
+            (combinations_df['campaigns_with_both'] >= 5)
+        ]
+        
+        # Print insights
+        for metric in ['click_rate', 'open_rate', 'revenue']:
+            metric_combinations = (
+                significant_combinations[significant_combinations['metric'] == metric]
+                .sort_values('lift', ascending=False)
+                .head(5)
+            )
+            
+            print(f"\nTop word combinations for {metric}:")
+            for _, row in metric_combinations.iterrows():
+                print(f"\nWords: '{row['word1']}' + '{row['word2']}'")
+                print(f"Lift: {row['lift']:.2%}")
+                print(f"Campaigns using both: {row['campaigns_with_both']}")
+                print(f"P-value: {row['p_value']:.4f}")
+        
+        return significant_combinations
+
+    def plot_word_impact(self, performance_views):
+        """
+        Create visualizations of word impact on performance metrics
+        
+        Args:
+            performance_views: Output from analyze_word_performance()
+        """
+        print("\nGenerating visualizations...")
+        os.makedirs('word_analysis', exist_ok=True)
+        
+        for metric in ['click_rate', 'open_rate', 'revenue']:
+            # Get top words for this metric
+            top_words = performance_views[f'{metric}_top_words']
+            
+            if len(top_words) == 0:
+                print(f"No significant words found for {metric}")
+                continue
+            
+            # Create bar chart of lifts
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                x=top_words['word'],
+                y=top_words[f'{metric}_lift'],
+                text=[f"{x:.1%}" for x in top_words[f'{metric}_lift']],
+                textposition='auto',
+            ))
+            
+            fig.update_layout(
+                title=f'Impact on {metric} by Word',
+                xaxis_title='Word',
+                yaxis_title='Lift',
+                yaxis_tickformat=',.0%',
+                height=600,
+                showlegend=False
+            )
+            
+            fig.write_html(f'word_analysis/{metric}_word_impact.html')
+            
+            # Create scatter plot of performance with/without word
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=top_words['occurrences'],
+                y=top_words[f'{metric}_lift'],
+                mode='markers+text',
+                text=top_words['word'],
+                textposition="top center",
+                marker=dict(
+                    size=top_words['occurrences'].apply(lambda x: np.sqrt(x) * 2),
+                    sizemin=8,
+                    color=top_words[f'{metric}_p_value'],
+                    colorscale='RdYlBu_r',
+                    showscale=True,
+                    colorbar=dict(title='P-value')
+                )
+            ))
+            
+            fig.update_layout(
+                title=f'{metric} Lift vs Word Frequency',
+                xaxis_title='Number of Occurrences',
+                yaxis_title='Lift',
+                yaxis_tickformat=',.0%',
+                height=600
+            )
+            
+            fig.write_html(f'word_analysis/{metric}_frequency_impact.html')
+        
+        print("Visualizations saved in 'word_analysis' directory")
+        
 def main():
-    """Main execution function with enhanced top performer analysis"""
+    """Main execution function with enhanced top performer and word performance analysis"""
     # Initialize all analyzers
     campaign_analyzer = CampaignAnalyzer('lgd_campaigns.csv', 'chia_campaigns.csv')
     content_analyzer = ContentAnalyzer('lgd_campaigns.csv', 'chia_campaigns.csv')
@@ -999,6 +1294,9 @@ def main():
         'revenue': 70  # 70th percentile for revenue
     })
     time_analyzer = TimeAnalyzer(content_analyzer)
+    
+    # Initialize word performance analyzer
+    word_analyzer = WordPerformanceAnalyzer(content_analyzer)
 
     # Generate comprehensive insights
     print("\nGenerating Campaign Performance Analysis...")
@@ -1013,13 +1311,17 @@ def main():
     print("\nGenerating Top Performer Analysis...")
     # Get performance data for different categories
     performance_data = top_performer_analyzer.identify_top_performers()
-    
-    # Generate comprehensive report with insights
     top_performer_report = top_performer_analyzer.generate_insights_report()
     print(top_performer_report)
-    
-    # Generate performance visualizations
     top_performer_analyzer.plot_performance_distributions()
+
+    print("\nGenerating Word Performance Analysis...")
+    # Analyze individual words (adjust min_occurrences as needed)
+    word_performance_views = word_analyzer.analyze_word_performance(min_occurrences=10)
+    # Analyze word combinations
+    word_combinations = word_analyzer.analyze_word_combinations(top_words_per_metric=10)
+    # Generate word performance visualizations
+    word_analyzer.plot_word_impact(word_performance_views)
 
     print("\nGenerating Temporal Analysis...")
     temporal_patterns = time_analyzer.analyze_temporal_patterns()
@@ -1044,11 +1346,10 @@ def main():
         f.write(f"Total Clicks: {campaign_metrics['overall_metrics']['total_clicks']:,}\n")
         f.write(f"Revenue per Click: ${campaign_metrics['overall_metrics']['revenue_per_click']:.4f}\n\n")
         
-        # Top Performer Analysis (Enhanced)
+        # Top Performer Analysis
         f.write("Top Performer Analysis:\n")
         f.write("=======================\n\n")
         
-        # Write insights for each performance category
         for category, data in performance_data.items():
             f.write(f"\n{category.replace('_', ' ').title()} Performance:\n")
             f.write(f"Number of campaigns: {data['count']}\n")
@@ -1062,11 +1363,36 @@ def main():
                 
             f.write("\n")
 
-        # Content Characteristics (if available)
+        # Word Performance Analysis
+        f.write("\nWord Performance Analysis:\n")
+        f.write("========================\n")
+        for metric in ['click_rate', 'open_rate', 'total_revenue']:
+            if f'{metric}_top_words' in word_performance_views:
+                top_words = word_performance_views[f'{metric}_top_words']
+                if not top_words.empty:
+                    f.write(f"\nTop 5 words for {metric}:\n")
+                    for _, row in top_words.head().iterrows():
+                        f.write(f"- '{row['word']}': {row[f'{metric}_lift']:.2%} lift ")
+                        f.write(f"(p={row[f'{metric}_p_value']:.4f}, n={row['occurrences']})\n")
+
+        # Word Combinations
+        if not word_combinations.empty:
+            f.write("\nTop Word Combinations:\n")
+            for metric in ['click_rate', 'open_rate', 'revenue']:
+                metric_combinations = word_combinations[
+                    word_combinations['metric'] == metric
+                ].sort_values('lift', ascending=False).head(3)
+                
+                if not metric_combinations.empty:
+                    f.write(f"\nBest combinations for {metric}:\n")
+                    for _, row in metric_combinations.iterrows():
+                        f.write(f"- '{row['word1']}' + '{row['word2']}': ")
+                        f.write(f"{row['lift']:.2%} lift (p={row['p_value']:.4f})\n")
+            
+        # Content Analysis Highlights
         if subject_analysis:
             f.write("\nContent Analysis Highlights:\n")
             f.write("==========================\n")
-            # Add relevant content analysis metrics here
             
         # Temporal Insights
         f.write("\nTemporal Performance Insights:\n")
@@ -1104,6 +1430,7 @@ def main():
     print("- 'analysis_output': Campaign visualizations")
     print("- 'time_analysis_output': Temporal analysis visualizations")
     print("- 'top_performer_analysis': Top performer visualizations")
+    print("- 'word_analysis': Word performance visualizations")
 
 if __name__ == "__main__":
     main()
